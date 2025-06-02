@@ -16,12 +16,14 @@ class AddListingPage extends StatefulWidget {
 class _AddListingPageState extends State<AddListingPage> {
   String _selectedListingType = 'Rent';
   String _selectedCategory = 'House';
+  String _selectedSpecialStatus = 'None';
   bool _isAdmin = false;
   bool _isLoading = true;
   String _adminName = '';
   final _supabase = Supabase.instance.client;
   final _authController = Get.find<AuthController>();
   final TextEditingController _propertyNameController = TextEditingController();
+  final TextEditingController _descriptionController = TextEditingController();
 
   @override
   void initState() {
@@ -33,6 +35,7 @@ class _AddListingPageState extends State<AddListingPage> {
   @override
   void dispose() {
     _propertyNameController.dispose();
+    _descriptionController.dispose();
     super.dispose();
   }
 
@@ -83,7 +86,6 @@ class _AddListingPageState extends State<AddListingPage> {
 
   void _validateAndNavigate() {
     if (_propertyNameController.text.trim().isEmpty) {
-      // Show centered error message box
       showDialog(
         context: context,
         builder: (BuildContext context) {
@@ -174,6 +176,8 @@ class _AddListingPageState extends State<AddListingPage> {
             listingType: _selectedListingType,
             propertyName: _propertyNameController.text,
             propertyType: _selectedCategory,
+            description: _descriptionController.text,
+            specialStatus: _selectedSpecialStatus,
           ),
         ),
       );
@@ -204,9 +208,10 @@ class _AddListingPageState extends State<AddListingPage> {
       body: _isAdmin
           ? _isLoading
               ? const Center(child: CircularProgressIndicator())
-              : Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 25, vertical: 20),
+              : SafeArea(
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 25, vertical: 20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -219,8 +224,7 @@ class _AddListingPageState extends State<AddListingPage> {
                             color: Colors.black,
                           ),
                           children: [
-                            TextSpan(
-                                text: 'Hi $_adminName, Fill detail of your '),
+                                TextSpan(text: 'Hi $_adminName, Fill detail of your '),
                             TextSpan(
                               text: 'real estate',
                               style: GoogleFonts.poppins(
@@ -254,7 +258,31 @@ class _AddListingPageState extends State<AddListingPage> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 35),
+                          const SizedBox(height: 25),
+
+                          // Description Input Field
+                          TextField(
+                            controller: _descriptionController,
+                            maxLines: 4,
+                            decoration: InputDecoration(
+                              filled: true,
+                              fillColor: Colors.grey.shade100,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                borderSide: BorderSide.none,
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  vertical: 20, horizontal: 20),
+                              hintText: 'Enter property description',
+                              hintStyle: GoogleFonts.poppins(fontSize: 16),
+                              suffixIcon: Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: Icon(Icons.description_outlined,
+                                    color: Colors.black54, size: 28),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 25),
 
                       // Listing Type
                       Text(
@@ -267,7 +295,7 @@ class _AddListingPageState extends State<AddListingPage> {
                       ),
                       const SizedBox(height: 15),
                       Row(
-                        children: ['Rent', 'Sell'].map((type) {
+                        children: ['Rent', 'Sale'].map((type) {
                           return Padding(
                             padding: const EdgeInsets.only(right: 12),
                             child: ChoiceChip(
@@ -336,13 +364,51 @@ class _AddListingPageState extends State<AddListingPage> {
                           );
                         }).toList(),
                       ),
-                      const Spacer(),
+                          const SizedBox(height: 35),
+
+                      // Special Status Dropdown
+                      Text(
+                        'Special Status',
+                        style: GoogleFonts.poppins(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 15),
+                      DropdownButtonFormField<String>(
+                        value: _selectedSpecialStatus,
+                        items: [
+                          'None',
+                          'Offer',
+                          'Special offer',
+                          'New Land',
+                        ].map((status) => DropdownMenuItem(
+                              value: status,
+                              child: Text(status, style: GoogleFonts.poppins(fontSize: 16)),
+                            )).toList(),
+                        onChanged: (value) {
+                          setState(() {
+                            _selectedSpecialStatus = value!;
+                          });
+                        },
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: Colors.grey.shade100,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            borderSide: BorderSide.none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(vertical: 20, horizontal: 20),
+                        ),
+                      ),
+                          const SizedBox(height: 35),
 
                       // Navigation Buttons
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          // Back Button (Rounded with Shadow)
+                              // Back Button
                           Container(
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
@@ -364,7 +430,7 @@ class _AddListingPageState extends State<AddListingPage> {
                             ),
                           ),
 
-                          // Next Button (Gradient Style)
+                              // Next Button
                           Container(
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(12),
@@ -393,7 +459,10 @@ class _AddListingPageState extends State<AddListingPage> {
                           ),
                         ],
                       ),
+                          const SizedBox(height: 20),
                     ],
+                      ),
+                    ),
                   ),
                 )
           : const Center(

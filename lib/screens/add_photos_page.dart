@@ -81,38 +81,31 @@ class _AddPhotosPageState extends State<AddPhotosPage> {
           // Upload image to Supabase Storage
           print('Uploading to storage...');
           await _supabase.storage
-              .from('property-photos')
-              .uploadBinary(fileName, bytes);
+              .from('properties')
+              .uploadBinary(fileName, bytes, fileOptions: FileOptions(
+                cacheControl: '3600',
+                upsert: true
+              ));
           print('Upload successful');
 
-          // Manually construct the URL
-          final projectUrl = _supabase.supabaseUrl;
-          final imageUrl = '$projectUrl/storage/v1/object/public/property-photos/$fileName';
-          print('Constructed image URL: $imageUrl');
+          // Get the public URL
+          final imageUrl = _supabase.storage
+              .from('properties')
+              .getPublicUrl(fileName);
+          print('Image URL: $imageUrl');
 
-          // Save to property_images table
+          // Save to property_photos table with photo_order
           print('Attempting to save to database...');
           final response = await _supabase
-              .from('property_images')
+              .from('property_photos')
               .insert({
                 'property_id': widget.propertyId,
-                'image_url': imageUrl,
-                'is_primary': i == 0,
-                'created_by': user.id,
+                'photo_url': imageUrl,  // Store the full public URL
+                'photo_order': i + 1,  // 1-based index for photo order
               })
               .select();
           
           print('Database response: $response');
-
-          // Verify the URL is accessible
-          try {
-            final testResponse = await _supabase.storage
-                .from('property-photos')
-                .download(fileName);
-            print('URL verification: ${testResponse != null ? 'Success' : 'Failed'}');
-          } catch (e) {
-            print('URL verification failed: $e');
-          }
 
         } catch (uploadError) {
           print('Error in upload process: $uploadError');
@@ -134,13 +127,13 @@ class _AddPhotosPageState extends State<AddPhotosPage> {
     } catch (e) {
       print('Overall error: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
             content: Text('Error uploading images: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
     } finally {
       if (mounted) {
         setState(() => _isUploading = false);
@@ -164,7 +157,7 @@ class _AddPhotosPageState extends State<AddPhotosPage> {
         fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
-      );
+    );
     }
   }
 
@@ -207,7 +200,7 @@ class _AddPhotosPageState extends State<AddPhotosPage> {
               'Upload at least one photo of your property',
               style: GoogleFonts.poppins(
                 fontSize: 14,
-                color: Colors.grey.shade600,
+                color: Colors.grey[700],
               ),
             ),
             const SizedBox(height: 20),
@@ -232,60 +225,60 @@ class _AddPhotosPageState extends State<AddPhotosPage> {
                             width: 1,
                           ),
                         ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
                             Icon(
                               Icons.add_photo_alternate,
                               size: 40,
                               color: Colors.grey.shade400,
-                            ),
+                          ),
                             const SizedBox(height: 8),
-                            Text(
+                          Text(
                               'Add Photos',
                               style: GoogleFonts.poppins(
                                 fontSize: 14,
-                                color: Colors.grey.shade600,
+                                color: Colors.grey[600],
                               ),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
+                      ),
                       ),
                     );
                   }
-                  return Stack(
-                    children: [
+                        return Stack(
+                          children: [
                       ClipRRect(
                         borderRadius: BorderRadius.circular(15),
                         child: _buildImagePreview(_selectedImages[index - 1]),
-                      ),
-                      Positioned(
+                            ),
+                            Positioned(
                         top: 5,
                         right: 5,
-                        child: GestureDetector(
+                              child: GestureDetector(
                           onTap: () {
                             setState(() {
                               _selectedImages.removeAt(index - 1);
                             });
                           },
-                          child: Container(
+                                child: Container(
                             padding: const EdgeInsets.all(4),
                             decoration: BoxDecoration(
                               color: Colors.black.withOpacity(0.5),
-                              shape: BoxShape.circle,
-                            ),
+                                    shape: BoxShape.circle,
+                                  ),
                             child: const Icon(
                               Icons.close,
                               color: Colors.white,
                               size: 20,
                             ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
             ),
             const SizedBox(height: 20),
             SizedBox(
@@ -299,14 +292,14 @@ class _AddPhotosPageState extends State<AddPhotosPage> {
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                ),
+                  ),
                 child: _isUploading
                     ? const CircularProgressIndicator(color: Colors.white)
                     : Text(
                         'Continue',
                         style: GoogleFonts.poppins(
                           fontSize: 16,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
               ),

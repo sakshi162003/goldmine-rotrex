@@ -92,10 +92,10 @@ class _AddInformationPageState extends State<AddInformationPage> {
       }).eq('id', widget.propertyId);
 
       if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => SuccessPage()),
-        );
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => SuccessPage()),
+    );
       }
     } catch (e) {
       if (mounted) {
@@ -152,12 +152,12 @@ class _AddInformationPageState extends State<AddInformationPage> {
             // Price Section
             Text(
               'Price',
-              style: GoogleFonts.poppins(
+                  style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 10),
+              const SizedBox(height: 10),
             if (widget.listingType == 'Rent')
               TextField(
                 controller: rentPriceController,
@@ -167,7 +167,7 @@ class _AddInformationPageState extends State<AddInformationPage> {
                   prefixIcon: const Icon(Icons.attach_money),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                  ),
+                ),
                 ),
               )
             else
@@ -179,15 +179,15 @@ class _AddInformationPageState extends State<AddInformationPage> {
                   prefixIcon: const Icon(Icons.attach_money),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                  ),
                 ),
+              ),
               ),
             const SizedBox(height: 20),
 
             // Area Section
             Text(
               'Area (sq ft)',
-              style: GoogleFonts.poppins(
+                style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
@@ -209,7 +209,7 @@ class _AddInformationPageState extends State<AddInformationPage> {
             // Year Built Section
             Text(
               'Year Built',
-              style: GoogleFonts.poppins(
+                style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
@@ -231,7 +231,7 @@ class _AddInformationPageState extends State<AddInformationPage> {
             // Rooms Section
             Text(
               'Rooms',
-              style: GoogleFonts.poppins(
+                style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
@@ -303,7 +303,7 @@ class _AddInformationPageState extends State<AddInformationPage> {
             // BHK Section
             Text(
               'BHK Type',
-              style: GoogleFonts.poppins(
+                style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
@@ -326,7 +326,7 @@ class _AddInformationPageState extends State<AddInformationPage> {
             // Facilities Section
             Text(
               'Facilities',
-              style: GoogleFonts.poppins(
+                style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
@@ -347,7 +347,7 @@ class _AddInformationPageState extends State<AddInformationPage> {
             // Additional Features Section
             Text(
               'Additional Features',
-              style: GoogleFonts.poppins(
+                style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
@@ -380,7 +380,7 @@ class _AddInformationPageState extends State<AddInformationPage> {
                 ),
                 child: Text(
                   'Finish',
-                  style: GoogleFonts.poppins(
+                        style: GoogleFonts.poppins(
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
                   ),

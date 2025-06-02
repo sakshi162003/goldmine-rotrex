@@ -65,10 +65,17 @@ class _ManagePropertiesScreenState extends State<ManagePropertiesScreen> {
         final propertyId = item['id'].toString();
 
         if (!uniqueProperties.containsKey(propertyId)) {
-          // Add property with its image
+          // Convert "Sell" to "Sale" in listing_type if needed
+          String listingType = item['listing_type'] ?? 'Sale';
+          if (listingType == 'Sell') {
+            listingType = 'Sale';
+          }
+
+          // Add property with its image and ensure listing_type is included
           uniqueProperties[propertyId] = {
             ...item,
             'image_url': item['property_images'][0]['image_url'],
+            'listing_type': listingType, // Use the converted listing type
           };
         }
       }

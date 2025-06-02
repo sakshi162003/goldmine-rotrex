@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class FilterPage extends StatefulWidget {
   final String initialLocation;
@@ -20,12 +21,17 @@ class FilterPage extends StatefulWidget {
 class _FilterPageState extends State<FilterPage> {
   late String? _selectedLocation;
   late String _selectedType;
+  bool _isLoadingLocations = true;
+  List<String> _locations = [];
+  final _supabase = Supabase.instance.client;
 
-  final List<String> locations = [
-    'Kharadi, Pune',
-    'Vimannagar, Pune',
-    'Hadapsar, Pune',
-    'Bali, Indonesia',
+  final List<String> propertyTypes = [
+    'All',
+    'House',
+    'Apartment',
+    'Villa',
+    'Land',
+    'Commercial'
   ];
 
   @override
@@ -33,6 +39,45 @@ class _FilterPageState extends State<FilterPage> {
     super.initState();
     _selectedLocation = widget.initialLocation.isEmpty ? null : widget.initialLocation;
     _selectedType = widget.initialType;
+    _loadLocations();
+  }
+
+  Future<void> _loadLocations() async {
+    try {
+      // Fetch distinct cities from the properties table
+      final response = await _supabase
+          .from('properties')
+          .select('city')
+          .not('city', 'is', null)
+          .execute();
+
+      if (response.data != null) {
+        // Extract unique cities and sort them
+        final Set<String> uniqueCities = {};
+        for (var row in response.data) {
+          if (row['city'] != null && row['city'].toString().isNotEmpty) {
+            uniqueCities.add(row['city'].toString());
+          }
+        }
+
+        setState(() {
+          _locations = uniqueCities.toList()..sort();
+          _isLoadingLocations = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading locations: $e');
+      setState(() {
+        _isLoadingLocations = false;
+      });
+    }
+  }
+
+  void _resetFilters() {
+    setState(() {
+      _selectedLocation = null;
+      _selectedType = 'All';
+    });
   }
 
   @override
@@ -60,12 +105,7 @@ class _FilterPageState extends State<FilterPage> {
               'Reset',
               style: GoogleFonts.raleway(color: const Color(0xFF7C8500)),
             ),
-            onPressed: () {
-              setState(() {
-                _selectedLocation = null;
-                _selectedType = 'All';
-              });
-            },
+            onPressed: _resetFilters,
           ),
         ],
       ),
@@ -85,7 +125,7 @@ class _FilterPageState extends State<FilterPage> {
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
-              children: ['All', 'House', 'Apartment', 'Land'].map((type) {
+              children: propertyTypes.map((type) {
                 return ChoiceChip(
                   label: Text(type),
                   selected: _selectedType == type,
@@ -104,20 +144,27 @@ class _FilterPageState extends State<FilterPage> {
               ),
             ),
             const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
+            _isLoadingLocations
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF7C8500),
+                    ),
+                  )
+                : DropdownButtonFormField<String>(
               value: _selectedLocation,
               isExpanded: true,
               decoration: InputDecoration(
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(15),
                 ),
+                      hintText: 'Select Location',
               ),
               items: [
                 const DropdownMenuItem<String>(
                   value: null,
-                  child: Text('Select Location'),
+                        child: Text('All Locations'),
                 ),
-                ...locations.map((location) => DropdownMenuItem(
+                      ..._locations.map((location) => DropdownMenuItem(
                       value: location,
                       child: Text(location),
                     )),
@@ -133,6 +180,7 @@ class _FilterPageState extends State<FilterPage> {
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(15),
                   ),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
                 onPressed: () {
                   widget.onApply({
@@ -143,7 +191,11 @@ class _FilterPageState extends State<FilterPage> {
                 },
                 child: Text(
                   'Apply Filter',
-                  style: GoogleFonts.raleway(color: Colors.white),
+                  style: GoogleFonts.raleway(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ),

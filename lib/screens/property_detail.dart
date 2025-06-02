@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:best/presentation/controllers/auth_controller.dart';
 import 'edit_property_page.dart';
+import 'package:best/widgets/bottom_nav_bar.dart';
 
 // Helper class for location data
 class _LocationData {
@@ -63,6 +64,11 @@ class _PropertyDetailsPageState extends State<PropertyDetailsPage> {
   final LatLng _defaultLocation =
       const LatLng(17.6805, 74.0183); // Satara, Maharashtra (default)
   int _selectedImageIndex = 0; // Track currently selected thumbnail
+  List<Map<String, dynamic>> _propertyPhotos = [];
+  bool _isLoadingPhotos = true;
+  int _currentImageIndex = 0;
+  bool isAdmin = false;
+  RealtimeChannel? _propertySubscription;
 
   // Convert to a Set for the Google Maps markers
   final Set<Marker> _markers = {};
@@ -73,6 +79,9 @@ class _PropertyDetailsPageState extends State<PropertyDetailsPage> {
     super.initState();
     isFavorite = widget.property['isFavorite'] ?? false;
     _checkIfFavorited();
+    _loadPropertyPhotos();
+    _checkAdminRole();
+    _setupRealtimeSubscription();
 
     // If the property has an image, make sure it always points to the single image
     if (widget.property.containsKey('image')) {
@@ -93,6 +102,73 @@ class _PropertyDetailsPageState extends State<PropertyDetailsPage> {
         _mapErrorMessage = e.toString();
       });
     }
+  }
+
+  void _setupRealtimeSubscription() {
+    final propertyId = widget.property['id'];
+    if (propertyId != null) {
+      final channel = _supabase
+          .channel('property_changes')
+          .on(
+            RealtimeListenTypes.postgresChanges,
+            ChannelFilter(
+              event: '*',
+              schema: 'public',
+              table: 'properties',
+              filter: 'id=eq.$propertyId',
+            ),
+            (payload, [ref]) {
+              _handlePropertyUpdate(payload);
+            },
+          );
+      
+      _propertySubscription = channel;
+      channel.subscribe((status, [err]) {
+        if (status == 'SUBSCRIBED') {
+          print('Successfully subscribed to property changes');
+        } else if (status == 'CHANNEL_ERROR') {
+          print('Error subscribing to property changes: $err');
+        }
+      });
+    }
+  }
+
+  void _handlePropertyUpdate(Map<String, dynamic> payload) {
+    if (payload['type'] == 'UPDATE' && payload['new'] != null) {
+      final newData = payload['new'] as Map<String, dynamic>;
+      if (mounted) {
+        setState(() {
+          widget.property.addAll({
+            'id': newData['id'] ?? widget.property['id'],
+            'name': newData['title'] ?? widget.property['name'],
+            'location': newData['city'] ?? widget.property['location'],
+            'price': newData['price'] != null ? '₹${newData['price']}' : widget.property['price'],
+            'type': newData['property_type'] ?? widget.property['type'],
+            'bedrooms': newData['bedrooms']?.toString() ?? widget.property['bedrooms'],
+            'bathrooms': newData['bathrooms']?.toString() ?? widget.property['bathrooms'],
+            'area': newData['area'] != null ? '${newData['area']} sq.ft.' : widget.property['area'],
+            'description': newData['description'] ?? widget.property['description'],
+            'created_at': newData['created_at'] ?? widget.property['created_at'],
+            // Add all the fields that are used in specifications section
+            'property_type': newData['property_type'] ?? widget.property['property_type'],
+            'year_built': newData['year_built']?.toString() ?? widget.property['year_built'],
+            'bhk': newData['bhk'] ?? widget.property['bhk'],
+            'balconies': newData['balconies']?.toString() ?? widget.property['balconies'],
+            'city': newData['city'] ?? widget.property['city'],
+            'state': newData['state'] ?? widget.property['state'],
+            'country': newData['country'] ?? widget.property['country'],
+            'address': newData['address'] ?? widget.property['address'],
+            'special_status': newData['special_status'] ?? widget.property['special_status'],
+          });
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _propertySubscription?.unsubscribe();
+    super.dispose();
   }
 
   void _initializeLocationData() {
@@ -385,7 +461,6 @@ class _PropertyDetailsPageState extends State<PropertyDetailsPage> {
                   '0') ??
               1200.0,
           'owner_id': user.id,
-          'status': 'available',
           'is_featured': false,
         };
 
@@ -519,18 +594,7 @@ class _PropertyDetailsPageState extends State<PropertyDetailsPage> {
     Overlay.of(context).insert(overlayEntry);
   }
 
-  void _shareProperty() {
-    final name = widget.property['name'] ?? 'Property';
-    final price = widget.property['price']?.toString() ?? '';
-    final location = widget.property['location'] ?? '';
-
-    Share.share(
-      'Check out this property: $name for \$$price in $location!',
-      subject: 'Real Estate Property',
-    );
-  }
-
-  void _contactViaWhatsApp() async {
+  void _shareProperty() async {
     final name = widget.property['name'] ?? 'Property';
     final price = widget.property['price']?.toString() ?? '';
     final location = widget.property['location'] ?? '';
@@ -539,50 +603,90 @@ class _PropertyDetailsPageState extends State<PropertyDetailsPage> {
     final bathrooms = widget.property['bathrooms']?.toString() ?? '0';
     final area = widget.property['area']?.toString() ?? '0';
 
-    // Show loading indicator
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Opening WhatsApp...'),
-        duration: Duration(seconds: 1),
-      ),
-    );
-
-    // Track property inquiry analytics
-    _trackPropertyInquiry(widget.property['id'] ?? 'unknown');
-
+    // Create a detailed property message
     final message = '''
-*I'm interested in this property!*
------------------
-*Property:* $name
-*Type:* $type
-*Price:* \$$price
-*Location:* $location
-*Details:* $bedrooms beds, $bathrooms baths, $area sqft
------------------
-Please provide more information about this property.
+🏠 *Check out this amazing property!*
+
+*Property Details:*
+• Name: $name
+• Type: $type
+• Price: ₹$price
+• Location: $location
+• Features: $bedrooms beds, $bathrooms baths, $area sqft
+
+Download our app to view more details and similar properties:
+https://play.google.com/store/apps/details?id=com.best.realestate
+
+#RealEstate #Property #HomeSearch
     ''';
 
-    // Updated WhatsApp number
-    final agentPhone = '7350530055'; // Direct number without country code
-
-    // Encode message for URL
+    // Encode the message for URL
     final encodedMessage = Uri.encodeComponent(message);
-
-    // Create WhatsApp URL - using India's country code (91)
-    final whatsappUrl = 'https://wa.me/917350530055?text=$encodedMessage';
-
-    // Launch WhatsApp
+    
+    // Create WhatsApp URL
+    final whatsappUrl = Uri.parse('whatsapp://send?text=$encodedMessage');
+    
     try {
-      await launchUrl(Uri.parse(whatsappUrl),
-          mode: LaunchMode.externalApplication);
+      // Check if WhatsApp is installed
+      if (await canLaunchUrl(whatsappUrl)) {
+        await launchUrl(whatsappUrl, mode: LaunchMode.externalApplication);
+      } else {
+        // If WhatsApp is not installed, show a dialog
+        if (context.mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Text(
+                'WhatsApp Not Installed',
+                style: GoogleFonts.raleway(fontWeight: FontWeight.bold),
+              ),
+              content: Text(
+                'WhatsApp is not installed on your device. Would you like to share through other means?',
+                style: GoogleFonts.raleway(),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    'Cancel',
+                    style: GoogleFonts.raleway(),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    // Fallback to regular share
+    Share.share(
+      message,
+      subject: 'Amazing Property: $name',
+    );
+                  },
+                  child: Text(
+                    'Share Anyway',
+                    style: GoogleFonts.raleway(
+                      color: const Color(0xFF988A44),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'Could not open WhatsApp. Please make sure WhatsApp is installed.'),
-          duration: Duration(seconds: 3),
-        ),
-      );
+      print('Error sharing to WhatsApp: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Error sharing to WhatsApp: $e',
+              style: GoogleFonts.raleway(),
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -611,25 +715,113 @@ Please provide more information about this property.
 
   // Method to edit the current property
   void _editProperty() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => EditPropertyPage(
-          propertyId: widget.property['id'].toString(),
-          propertyData: widget.property,
+    try {
+      // Show loading indicator
+      setState(() {
+        isLoading = true;
+      });
+
+      // Get the current property data
+      final propertyId = widget.property['id'];
+      final response = await _supabase
+          .from('properties')
+          .select('*, property_photos(*)')
+          .eq('id', propertyId)
+          .single();
+
+      if (response == null) {
+        throw Exception('Property not found');
+      }
+
+      // Convert "Sell" to "Sale" in listing_type if needed
+      if (response['listing_type'] == 'Sell') {
+        response['listing_type'] = 'Sale';
+      }
+
+      // Navigate to edit page
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => EditPropertyPage(
+            propertyId: propertyId,
+            propertyData: response,
+          ),
         ),
-      ),
-    );
-    // Refresh the property details after returning from edit page
-    Navigator.pop(context, true); // Pop with refresh flag
+      );
+
+      // If the edit was successful, refresh the property data
+      if (result == true) {
+        // Fetch updated property data
+        final updatedProperty = await _supabase
+            .from('properties')
+            .select('*, property_photos(*)')
+            .eq('id', propertyId)
+            .single();
+
+        if (updatedProperty != null) {
+          // Update the property data with all fields
+          setState(() {
+            widget.property.addAll({
+              'id': updatedProperty['id'] ?? '',
+              'name': updatedProperty['title'] ?? 'Property',
+              'location': updatedProperty['city'] ?? 'Unknown City',
+              'price': updatedProperty['price'] != null ? '₹${updatedProperty['price']}' : 'Price on request',
+              'type': updatedProperty['property_type'] ?? 'House',
+              'bedrooms': updatedProperty['bedrooms']?.toString() ?? '0',
+              'bathrooms': updatedProperty['bathrooms']?.toString() ?? '0',
+              'area': updatedProperty['area'] != null ? '${updatedProperty['area']} sq.ft.' : 'Area not specified',
+              'description': updatedProperty['description'] ?? '',
+              'created_at': updatedProperty['created_at'] ?? DateTime.now().toIso8601String(),
+              'image': updatedProperty['property_photos'] != null && 
+                      updatedProperty['property_photos'].isNotEmpty
+                  ? updatedProperty['property_photos'][0]['photo_url']
+                  : 'assets/image1.jpg',
+              // Add all the fields that are used in specifications section
+              'property_type': updatedProperty['property_type'] ?? 'House',
+              'year_built': updatedProperty['year_built']?.toString() ?? '2022',
+              'bhk': updatedProperty['bhk'] ?? '3 BHK',
+              'balconies': updatedProperty['balconies']?.toString() ?? '2',
+              'city': updatedProperty['city'] ?? '',
+              'state': updatedProperty['state'] ?? '',
+              'country': updatedProperty['country'] ?? '',
+              'address': updatedProperty['address'] ?? '',
+              'special_status': updatedProperty['special_status'] ?? 'None',
+            });
+          });
+
+          // Reload property photos
+          await _loadPropertyPhotos();
+
+          // Show success message
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Property updated successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
+
+          // Notify parent screens to refresh their data
+          Navigator.pop(context, true); // Pop with refresh flag
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error updating property: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
   }
   
   // Method to delete the current property
   Future<void> _deleteProperty() async {
     try {
-      final propertyId = widget.property['id'];
-      
-      // Confirm deletion
+      // Show confirmation dialog
       final confirm = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
@@ -665,46 +857,41 @@ Please provide more information about this property.
 
       if (confirm != true) return;
 
-      // First check if this is a mock property
-      if (propertyId is String && propertyId.length < 5) {
-        // Just navigate back for mock data
-        Navigator.pop(context, true); // Pop with refresh flag
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Property deleted successfully'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        return;
-      }
-
-      // Show loading indicator
       setState(() {
         isLoading = true;
       });
 
-      // Delete the property images first (due to foreign key constraint)
-      await _supabase
-          .from('property_images')
-          .delete()
-          .eq('property_id', propertyId);
+      final propertyId = widget.property['id'];
 
-      // Delete the property amenities
+      // Delete property photos first (due to foreign key constraint)
       await _supabase
-          .from('property_amenities')
+          .from('property_photos')
           .delete()
           .eq('property_id', propertyId);
 
       // Delete favorites related to this property
-      await _supabase.from('favorites').delete().eq('property_id', propertyId);
+      await _supabase
+          .from('favorites')
+          .delete()
+          .eq('property_id', propertyId);
 
-      // Delete the property
-      await _supabase.from('properties').delete().eq('id', propertyId);
+      // Delete property inquiries
+      await _supabase
+          .from('property_inquiries')
+          .delete()
+          .eq('property_id', propertyId);
+
+      // Finally, delete the property
+      await _supabase
+          .from('properties')
+          .delete()
+          .eq('id', propertyId);
 
       setState(() {
         isLoading = false;
       });
 
+      // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Property deleted successfully'),
@@ -712,8 +899,8 @@ Please provide more information about this property.
         ),
       );
       
-      // Navigate back to home screen after deletion
-      Navigator.pop(context, true); // Pop with refresh flag
+      // Navigate back to previous screen with refresh flag
+      Navigator.pop(context, true);
     } catch (e) {
       setState(() {
         isLoading = false;
@@ -728,483 +915,662 @@ Please provide more information about this property.
     }
   }
 
+  Future<void> _loadPropertyPhotos() async {
+    try {
+      setState(() {
+        _isLoadingPhotos = true;
+      });
+
+      // First check if we have a valid property ID
+      if (widget.property['id'] == null) {
+        print('Property ID is null, cannot fetch photos');
+        setState(() {
+          _isLoadingPhotos = false;
+        });
+        return;
+      }
+
+      // Fetch property photos from Supabase using the correct table name
+      final response = await _supabase
+          .from('property_photos')
+          .select('*')
+          .eq('property_id', widget.property['id'])
+          .order('photo_order', ascending: true);
+
+      if (response != null && response.isNotEmpty) {
+        print('Fetched ${response.length} property photos');
+        setState(() {
+          _propertyPhotos = List<Map<String, dynamic>>.from(response).map((photo) {
+            return {
+              'photo_url': photo['photo_url'],
+              'photo_order': photo['photo_order'],
+            };
+          }).toList();
+          _isLoadingPhotos = false;
+        });
+      } else {
+        // If no photos found, try to use the property's main image
+        print('No property photos found, using main image');
+        if (widget.property['image'] != null) {
+          setState(() {
+            _propertyPhotos = [
+              {
+                'photo_url': widget.property['image'],
+                'photo_order': 0,
+              }
+            ];
+            _isLoadingPhotos = false;
+          });
+        } else {
+          print('No images available for this property');
+          setState(() {
+            _propertyPhotos = [];
+            _isLoadingPhotos = false;
+          });
+        }
+      }
+    } catch (e) {
+      print('Error loading property photos: $e');
+      setState(() {
+        _isLoadingPhotos = false;
+      });
+    }
+  }
+
+  Widget _buildPropertyPhotosGallery() {
+    if (_isLoadingPhotos) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF7C8500)),
+      );
+    }
+
+    if (_propertyPhotos.isEmpty) {
+      return Container(
+        height: 300,
+        decoration: BoxDecoration(
+          color: Colors.grey[200],
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Center(
+          child: Icon(
+            Icons.image_not_supported,
+            size: 50,
+            color: Colors.grey,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        // Main image container
+        Container(
+          height: 300,
+          margin: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: PageView.builder(
+              itemCount: _propertyPhotos.length,
+              onPageChanged: (index) {
+                setState(() {
+                  _currentImageIndex = index;
+                });
+              },
+              itemBuilder: (context, index) {
+                return Image.network(
+                  _propertyPhotos[index]['photo_url'],
+                  fit: BoxFit.cover,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return Container(
+                      color: Colors.grey[200],
+                      child: Center(
+                        child: CircularProgressIndicator(
+                          value: loadingProgress.expectedTotalBytes != null
+                              ? loadingProgress.cumulativeBytesLoaded /
+                                  loadingProgress.expectedTotalBytes!
+                              : null,
+                          color: const Color(0xFF7C8500),
+                        ),
+                      ),
+                    );
+                  },
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      color: Colors.grey[200],
+                      child: const Center(
+                        child: Icon(
+                          Icons.error_outline,
+                          color: Colors.red,
+                          size: 50,
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+        // Thumbnail gallery
+        Container(
+          height: 80,
+          margin: const EdgeInsets.only(top: 16),
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            itemCount: _propertyPhotos.length,
+            itemBuilder: (context, index) {
+              return GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _currentImageIndex = index;
+                  });
+                },
+                child: Container(
+                  width: 80,
+                  margin: const EdgeInsets.only(right: 8),
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: _currentImageIndex == index
+                          ? const Color(0xFF7C8500)
+                          : Colors.transparent,
+                      width: 2,
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.network(
+                      _propertyPhotos[index]['photo_url'],
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return Container(
+                          color: Colors.grey[200],
+                          child: Center(
+                            child: CircularProgressIndicator(
+                              value: loadingProgress.expectedTotalBytes != null
+                                  ? loadingProgress.cumulativeBytesLoaded /
+                                      loadingProgress.expectedTotalBytes!
+                                  : null,
+                              color: const Color(0xFF7C8500),
+                            ),
+                          ),
+                        );
+                      },
+                      errorBuilder: (context, error, stackTrace) {
+                        return Container(
+                          color: Colors.grey[200],
+                          child: const Center(
+                            child: Icon(
+                              Icons.error_outline,
+                              color: Colors.red,
+                              size: 24,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        // Page indicator
+        Container(
+          margin: const EdgeInsets.only(top: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(
+              _propertyPhotos.length,
+              (index) => Container(
+                width: 8,
+                height: 8,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _currentImageIndex == index
+                      ? const Color(0xFF7C8500)
+                      : Colors.grey[300],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
+        leading: Container(
+          margin: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.3),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () => Navigator.pop(context),
+          ),
         ),
         actions: [
-          // Admin buttons - only shown for admin users
-          Obx(() => _authController.isAdmin.value 
-            ? Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit, color: Colors.white),
-                    onPressed: _editProperty,
-                    tooltip: 'Edit property',
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete, color: Colors.white),
-                    onPressed: _deleteProperty,
-                    tooltip: 'Delete property',
-                  ),
-                ],
-              )
-            : const SizedBox.shrink()
-          ),
-          IconButton(
-            icon: AnimatedCrossFade(
-              duration: const Duration(milliseconds: 300),
-              firstChild: const Icon(Icons.favorite, color: Colors.red),
-              secondChild:
-                  const Icon(Icons.favorite_border, color: Colors.white),
-              crossFadeState: isFavorite
-                  ? CrossFadeState.showFirst
-                  : CrossFadeState.showSecond,
+          // Like button for all users
+          Container(
+            margin: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.3),
+              shape: BoxShape.circle,
             ),
-            onPressed: isLoading ? null : _toggleFavorite,
-            tooltip: isFavorite ? 'Remove from likes' : 'Add to likes',
+            child: IconButton(
+              icon: Icon(
+                isFavorite ? Icons.favorite : Icons.favorite_border,
+                color: isFavorite ? Colors.red : Colors.white,
+              ),
+              onPressed: _toggleFavorite,
+              tooltip: 'Add to favorites',
+            ),
           ),
-          IconButton(
-            icon: const Icon(Icons.share, color: Colors.white),
-            onPressed: _shareProperty,
+          // Share button for all users
+          Container(
+            margin: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.3),
+              shape: BoxShape.circle,
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.share, color: Colors.white),
+              onPressed: _shareProperty,
+              tooltip: 'Share property',
+            ),
           ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildPropertyImages(),
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildPropertyHeader(),
-                  const SizedBox(height: 16),
-                  _buildPropertyFeatures(),
-                  const SizedBox(height: 24),
-                  _buildSectionTitle('Description'),
-                  Text(
-                    'Beautiful ${widget.property['type']} located in ${widget.property['location']}. This ${widget.property['bedrooms']} bedroom, ${widget.property['bathrooms']} bathroom property offers ${widget.property['area']} sqft of living space in a prime location. Perfect for families or professionals seeking a comfortable and modern living space with easy access to amenities and transportation.',
-                    style: GoogleFonts.raleway(color: Colors.grey[600]),
-                  ),
-                  const SizedBox(height: 24),
-                  _buildSectionTitle('Location'),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.location_on,
-                              size: 16, color: const Color(0xFF988A44)),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              widget.property['location'] ?? 'Location',
-                              style: GoogleFonts.raleway(
-                                fontSize: 14,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Nearby Places: ${_nearbyPlaces.length} Points of Interest',
-                        style: GoogleFonts.raleway(
-                          fontSize: 12,
-                          color: Colors.grey[500],
-                          fontStyle: FontStyle.italic,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-
-                      // Use a static map image instead of Google Maps widget
-                      _buildMapSection(),
-
-                      const SizedBox(height: 12),
-
-                      // Show nearby places as a list
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Nearby Places',
-                            style: GoogleFonts.raleway(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          ..._nearbyPlaces
-                              .map((place) => Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 4.0),
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          _getIconForPlaceType(place['type']),
-                                          size: 16,
-                                          color: const Color(0xFF988A44),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            '${place['name']} (${place['distance']})',
-                                            style: GoogleFonts.raleway(),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ))
-                              .toList(),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  _buildSectionTitle('Amenities'),
-                  _buildAmenitiesGrid(),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _contactViaWhatsApp,
-                      icon: const Icon(Icons.chat, color: Colors.white),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            const Color(0xFF25D366), // WhatsApp green
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 2,
-                      ),
-                      label: Text(
-                        'Contact via WhatsApp',
-                        style: GoogleFonts.raleway(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Additional contact options
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            // Launch phone call
-                            launchUrl(Uri.parse('tel:+917350530055'));
-                          },
-                          icon: const Icon(Icons.call, color: Colors.white),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF988A44),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          label: Text(
-                            'Call Agent',
-                            style: GoogleFonts.raleway(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Scheduling visit...'),
-                                duration: Duration(seconds: 3),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.calendar_today,
-                              color: Colors.white),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blueGrey,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          label: Text(
-                            'Schedule Visit',
-                            style: GoogleFonts.raleway(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+          // Admin buttons - only shown for admin users
+          if (isAdmin) ...[
+            Container(
+              margin: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.3),
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.edit, color: Colors.white),
+                onPressed: _editProperty,
+                tooltip: 'Edit property',
+              ),
+            ),
+            Container(
+              margin: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.3),
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.delete, color: Colors.white),
+                onPressed: _deleteProperty,
+                tooltip: 'Delete property',
               ),
             ),
           ],
-        ),
+        ],
       ),
-    );
-  }
-
-  Widget _buildPropertyImages() {
-    // Single image for all property images
-    final List<String> propertyImages = List.filled(5, 'assets/image1.jpg');
-
-    // Use the same image for all
-    List<String> displayImages = propertyImages;
-
-    return Stack(
-      children: [
-        GestureDetector(
-          onTap: () => _openImageGallery(displayImages, 0),
-          child: Hero(
-            tag: displayImages[0],
-            child: Container(
-              height: 350,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(20),
-                  bottomRight: Radius.circular(20),
-                ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Property Images Section with fixed height
+              SizedBox(
+                height: MediaQuery.of(context).size.height * 0.4,
+                child: _buildPropertyPhotosGallery(),
               ),
-              child: ClipRRect(
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(20),
-                  bottomRight: Radius.circular(20),
-                ),
-                child: Image.asset(
-                  'assets/image1.jpg',
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    // Fallback if image fails to load
-                    return Container(
-                      color: Colors.grey[300],
-                      child: const Center(
-                        child: Icon(Icons.image_not_supported,
-                            size: 50, color: Colors.grey),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-          ),
-        ),
-
-        // Thumbnails at the bottom
-        Positioned(
-          bottom: 16,
-          right: 16,
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  spreadRadius: 1,
-                  blurRadius: 5,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                color: Colors.black.withOpacity(0.7),
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                child: Row(
+              
+              // Property Details Section with proper padding
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (int i = 0; i < 3; i++)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                        child: _buildThumbnail(displayImages[i], i),
-                      ),
-                    GestureDetector(
-                      onTap: () => _openImageGallery(displayImages, 0),
-                      child: Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Center(
-                          child: Text(
-                            '+2',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
+                    _buildPropertyHeader(),
+                    const SizedBox(height: 24),
+                    _buildPropertyFeatures(),
+                    const SizedBox(height: 32),
+                    _buildDescriptionSection(),
+                    const SizedBox(height: 32),
+                    _buildSectionTitle('Location'),
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.location_on,
+                                  size: 18, color: const Color(0xFF988A44)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  widget.property['location'] ?? 'Location',
+                                  style: GoogleFonts.raleway(
+                                    fontSize: 15,
+                                    color: Colors.grey[700],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Nearby Places: ${_nearbyPlaces.length} Points of Interest',
+                            style: GoogleFonts.raleway(
+                              fontSize: 13,
+                              color: Colors.grey[500],
+                              fontStyle: FontStyle.italic,
                             ),
                           ),
-                        ),
+                          const SizedBox(height: 16),
+                          _buildMapSection(),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[50],
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.grey[200]!),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Nearby Places',
+                                  style: GoogleFonts.raleway(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                ..._nearbyPlaces.map((place) => Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 8.0),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        _getIconForPlaceType(place['type']),
+                                        size: 18,
+                                        color: const Color(0xFF988A44),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          '${place['name']} (${place['distance']})',
+                                          style: GoogleFonts.raleway(
+                                            fontSize: 14,
+                                            color: Colors.grey[700],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )).toList(),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                    const SizedBox(height: 32),
+                    _buildSectionTitle('Amenities'),
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: _buildAmenitiesGrid(),
+                    ),
+                    const SizedBox(height: 32),
+                    // Contact Buttons Section
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Column(
+                        children: [
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: _shareProperty,
+                              icon: const Icon(Icons.chat, color: Colors.white),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF25D366),
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                elevation: 2,
+                              ),
+                              label: Text(
+                                'Contact via WhatsApp',
+                                style: GoogleFonts.raleway(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    launchUrl(Uri.parse('tel:+917350530055'));
+                                  },
+                                  icon: const Icon(Icons.call, color: Colors.white),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF988A44),
+                                    padding: const EdgeInsets.symmetric(vertical: 14),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  label: Text(
+                                    'Call Agent',
+                                    style: GoogleFonts.raleway(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Scheduling visit...'),
+                                        duration: Duration(seconds: 3),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(Icons.calendar_today,
+                                      color: Colors.white),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.blueGrey,
+                                    padding: const EdgeInsets.symmetric(vertical: 14),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  label: Text(
+                                    'Schedule Visit',
+                                    style: GoogleFonts.raleway(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
                   ],
                 ),
               ),
-            ),
-          ),
-        ),
-
-        // Add a photo count indicator
-        Positioned(
-          top: 16,
-          right: 16,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.7),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.photo_library, color: Colors.white, size: 16),
-                const SizedBox(width: 4),
-                Text(
-                  '${displayImages.length} Photos',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildThumbnail(String image, int index) {
-    // Make sure we have a valid _selectedImageIndex
-    final selectedIndex = _selectedImageIndex;
-
-    return GestureDetector(
-      onTap: () {
-        // Update the selected image index and open gallery
-        setState(() {
-          _selectedImageIndex = index;
-        });
-        _openImageGallery([image], 0);
-      },
-      child: Container(
-        width: 48,
-        height: 48,
-        margin: const EdgeInsets.only(right: 8),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: selectedIndex == index
-                ? Theme.of(context).primaryColor
-                : Colors.grey[300]!,
-            width: 2,
-          ),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: Image.asset(
-            'assets/image1.jpg',
-            fit: BoxFit.cover,
+            ],
           ),
         ),
       ),
-    );
-  }
-
-  void _openImageGallery(List<String> images, int initialIndex) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => PropertyImageGallery(
-          // Use single image
-          images: List.filled(images.length, 'assets/image1.jpg'),
-          initialIndex: initialIndex,
-        ),
-      ),
+      bottomNavigationBar: const BottomNavBar(selectedIndex: 0),
     );
   }
 
   Widget _buildPropertyHeader() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          widget.property['name'],
-          style: GoogleFonts.raleway(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Icon(Icons.location_on, size: 16, color: Colors.grey[600]),
-            const SizedBox(width: 4),
-            Text(
-              widget.property['location'],
-              style: GoogleFonts.raleway(
-                fontSize: 16,
-                color: Colors.grey[600],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              '\$${widget.property['price']}/month',
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Property Name with proper text wrapping
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              widget.property['name'],
               style: GoogleFonts.raleway(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: const Color(0xFF988A44),
+                height: 1.2,
               ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF988A44).withOpacity(0.2),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                widget.property['type'],
-                style: GoogleFonts.raleway(
-                  color: const Color(0xFF988A44),
-                  fontWeight: FontWeight.bold,
+          ),
+          
+          // Location Row with proper spacing
+          Container(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.location_on, size: 18, color: Colors.grey[600]),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    widget.property['location'] ?? 'Location not specified',
+                    style: GoogleFonts.raleway(
+                      fontSize: 15,
+                      color: Colors.grey[600],
+                      height: 1.3,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
-      ],
+          ),
+          
+          // Price and Type Row
+          Container(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Price
+                Flexible(
+                  child: Text(
+                    '\$${widget.property['price']}/month',
+                    style: GoogleFonts.raleway(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF988A44),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Property Type Badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF988A44).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    widget.property['type'] ?? 'Property',
+                    style: GoogleFonts.raleway(
+                      fontSize: 13,
+                      color: const Color(0xFF988A44),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Property Status Badge
+          Container(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.circle,
+                        size: 8,
+                        color: Colors.green[700],
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Available',
+                        style: GoogleFonts.raleway(
+                          fontSize: 13,
+                          color: Colors.green[700],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1212,49 +1578,101 @@ Please provide more information about this property.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _buildFeatureItem(
-                Icons.bed, '${widget.property['bedrooms'] ?? 2} Beds'),
-            _buildFeatureItem(
-                Icons.bathtub, '${widget.property['bathrooms'] ?? 1} Baths'),
-            _buildFeatureItem(
-                Icons.square_foot, '${widget.property['area'] ?? 1200} sqft'),
-            _buildFeatureItem(Icons.star, '4.8'),
-          ],
+        // Features Grid in its own container
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.grey[50],
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Key Features',
+                style: GoogleFonts.raleway(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[800],
+                ),
+              ),
+              const SizedBox(height: 16),
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 3,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 8,
+                childAspectRatio: 0.8,
+                children: [
+                  _buildFeatureItem(Icons.bed, '${widget.property['bedrooms'] ?? 2} Beds'),
+                  _buildFeatureItem(Icons.bathtub, '${widget.property['bathrooms'] ?? 1} Baths'),
+                  _buildFeatureItem(Icons.square_foot, '${widget.property['area'] ?? 1200} sqft'),
+                ],
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 24),
-        _buildSectionTitle('Specifications'),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          childAspectRatio: 3,
-          physics: const NeverScrollableScrollPhysics(),
-          children: [
-            _buildSpecItem('Type', widget.property['type'] ?? 'House'),
-            _buildSpecItem('Year Built', '2022'),
-            _buildSpecItem('Heating', 'Central'),
-            _buildSpecItem('Cooling', 'Central AC'),
-            _buildSpecItem('Parking', '2 Spaces'),
-            _buildSpecItem('Lot Size',
-                '${(int.tryParse(widget.property['area']?.toString() ?? '0') ?? 1000) * 1.5} sqft'),
-          ],
+        // Specifications in its own container (reverted to original)
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.grey[50],
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Specifications',
+                style: GoogleFonts.raleway(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[800],
+                ),
+              ),
+              const SizedBox(height: 16),
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 2,
+                childAspectRatio: 3,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                children: [
+                  _buildSpecItem('Type', widget.property['property_type'] ?? 'House'),
+                  _buildSpecItem('Year Built', widget.property['year_built']?.toString() ?? '2022'),
+                  _buildSpecItem('BHK', widget.property['bhk'] ?? '3 BHK'),
+                  _buildSpecItem('Balconies', widget.property['balconies']?.toString() ?? '2'),
+                  _buildSpecItem('Price', '₹${widget.property['price']?.toString() ?? '0'}'),
+                  _buildSpecItem('Area', '${widget.property['area']?.toString() ?? '0'} sqft'),
+                ],
+              ),
+            ],
+          ),
         ),
       ],
     );
   }
 
   Widget _buildSpecItem(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             '$label: ',
             style: GoogleFonts.raleway(
-              fontSize: 14,
+              fontSize: 13,
               fontWeight: FontWeight.bold,
               color: Colors.grey[700],
             ),
@@ -1263,8 +1681,11 @@ Please provide more information about this property.
             child: Text(
               value,
               style: GoogleFonts.raleway(
-                fontSize: 14,
+                fontSize: 13,
+                color: Colors.grey[600],
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -1274,15 +1695,20 @@ Please provide more information about this property.
 
   Widget _buildFeatureItem(IconData icon, String text) {
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, color: const Color(0xFF988A44)),
-        const SizedBox(height: 4),
+        Icon(icon, color: const Color(0xFF988A44), size: 24),
+        const SizedBox(height: 8),
         Text(
           text,
           style: GoogleFonts.raleway(
-            fontSize: 12,
+            fontSize: 13,
             fontWeight: FontWeight.bold,
+            color: Colors.grey[700],
           ),
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
         ),
       ],
     );
@@ -1290,12 +1716,13 @@ Please provide more information about this property.
 
   Widget _buildSectionTitle(String title) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12.0),
+      padding: const EdgeInsets.only(bottom: 16.0),
       child: Text(
         title,
         style: GoogleFonts.raleway(
-          fontSize: 18,
+          fontSize: 20,
           fontWeight: FontWeight.bold,
+          color: Colors.grey[800],
         ),
       ),
     );
@@ -1317,20 +1744,31 @@ Please provide more information about this property.
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
         childAspectRatio: 4,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
       ),
       itemCount: amenities.length,
       itemBuilder: (context, index) {
-        return Row(
-          children: [
-            const Icon(Icons.check_circle, color: Color(0xFF988A44), size: 16),
-            const SizedBox(width: 8),
-            Text(
-              amenities[index],
-              style: GoogleFonts.raleway(),
-            ),
-          ],
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.check_circle, color: Color(0xFF988A44), size: 18),
+              const SizedBox(width: 8),
+              Text(
+                amenities[index],
+                style: GoogleFonts.raleway(
+                  fontSize: 14,
+                  color: Colors.grey[700],
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -1568,6 +2006,49 @@ Please provide more information about this property.
         ],
       ),
     );
+  }
+
+  // Update the description section to use admin's description
+  Widget _buildDescriptionSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitle('Description'),
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Text(
+            widget.property['description'] ?? 'No description available',
+            style: GoogleFonts.raleway(
+              fontSize: 15,
+              height: 1.5,
+              color: Colors.grey[700],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _checkAdminRole() async {
+    try {
+      final user = _supabase.auth.currentUser;
+      if (user != null) {
+        final response = await _supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', user.id)
+            .single();
+        
+        setState(() {
+          isAdmin = response['role'] == 'admin';
+        });
+      }
+    } catch (e) {
+      print('Error checking admin role: $e');
+      setState(() {
+        isAdmin = false;
+      });
+    }
   }
 }
 
@@ -2233,7 +2714,7 @@ class _PropertyImageGalleryState extends State<PropertyImageGallery> {
                     shape: BoxShape.circle,
                     color: _currentIndex == index
                         ? const Color(0xFF988A44)
-                        : Colors.grey.withOpacity(0.5),
+                        : Colors.white.withOpacity(0.5),
                   ),
                 ),
               ),

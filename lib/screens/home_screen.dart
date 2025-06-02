@@ -16,6 +16,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:location/location.dart' as location_package;
 import 'package:geolocator/geolocator.dart';
 import 'dart:math' show cos, sqrt, asin, sin, pi, min;
+import 'dart:async';
 import 'package:get/get.dart';
 import 'package:best/presentation/controllers/auth_controller.dart';
 import 'package:best/screens/edit_property_page.dart';
@@ -86,6 +87,7 @@ class _HomeTabContentState extends State<HomeTabContent> {
   final SupabaseClient _supabase = Supabase.instance.client;
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final _authController = Get.find<AuthController>();
+  StreamSubscription<RealtimeChannel>? _propertiesSubscription;
 
   // State variables
   List<Map<String, dynamic>> _nearbyProperties = [];
@@ -108,6 +110,7 @@ class _HomeTabContentState extends State<HomeTabContent> {
   void initState() {
     super.initState();
     _getCurrentLocation();
+    _setupPropertiesSubscription();
   }
 
   @override
@@ -116,60 +119,51 @@ class _HomeTabContentState extends State<HomeTabContent> {
     _emailController.dispose();
     _phoneController.dispose();
     _messageController.dispose();
+    _propertiesSubscription?.cancel();
     super.dispose();
   }
 
-  // Get user's current location
+  void _setupPropertiesSubscription() {
+    final channel = _supabase.channel('public:properties')
+      ..on(
+        RealtimeListenTypes.postgresChanges,
+        ChannelFilter(event: '*', schema: 'public', table: 'properties'),
+        (payload, [ref]) {
+          // Refresh properties when there are changes
+          _loadNearbyProperties(_currentPosition);
+        },
+      );
+
+    channel.subscribe();
+  }
+
   Future<void> _getCurrentLocation() async {
     try {
-      _isLoadingLocation = true;
-      setState(() {});
-
-      // Check if location services are enabled
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        _locationError = 'Location services are disabled. Please enable them.';
-        _isLoadingLocation = false;
-        setState(() {});
-        _loadNearbyProperties(); // Load with default coordinates
+        // Location services are not enabled
         return;
       }
 
-      // Check for location permissions
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
-          _locationError = 'Location permissions are denied.';
-          _isLoadingLocation = false;
-          setState(() {});
-          _loadNearbyProperties(); // Load with default coordinates
+          // Permissions are denied
           return;
         }
       }
 
       if (permission == LocationPermission.deniedForever) {
-        _locationError = 'Location permissions are permanently denied.';
-        _isLoadingLocation = false;
-        setState(() {});
-        _loadNearbyProperties(); // Load with default coordinates
+        // Permissions are denied forever
         return;
       }
 
-      // Get current position
       _currentPosition = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high);
-
-      _isLoadingLocation = false;
-      setState(() {});
-
-      // Load nearby properties with the current location
-      _loadNearbyProperties(_currentPosition);
+      await _loadNearbyProperties(_currentPosition);
     } catch (e) {
-      _locationError = 'Error getting location: $e';
-      _isLoadingLocation = false;
-      setState(() {});
-      _loadNearbyProperties(); // Load with default coordinates as fallback
+      print('Error getting location: $e');
     }
   }
 
@@ -201,51 +195,100 @@ class _HomeTabContentState extends State<HomeTabContent> {
         _isLoadingProperties = true;
       });
 
-      // Default coordinates for Pune if position is null
-      double latitude = position?.latitude ?? 18.5204;
-      double longitude = position?.longitude ?? 73.8567;
+      // Get user's current location
+      if (position == null) {
+        bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) {
+          setState(() {
+            _isLoadingProperties = false;
+            _locationError = 'Location services are disabled';
+          });
+          return;
+        }
 
-      // Fetch properties from Supabase
-      final response = await _supabase.from('properties').select('*').limit(10);
-
-      List<Map<String, dynamic>> propertiesData =
-          List<Map<String, dynamic>>.from(response);
-
-      // If we have position, calculate distance and sort by proximity
-      if (position != null) {
-        // Add distance to each property
-        for (var property in propertiesData) {
-          // Parse location data - handle both string and double types
-          double propertyLat = 0.0;
-          double propertyLng = 0.0;
-
-          if (property['latitude'] != null) {
-            propertyLat = property['latitude'] is String
-                ? double.tryParse(property['latitude']) ?? 0.0
-                : (property['latitude'] ?? 0.0);
-          }
-
-          if (property['longitude'] != null) {
-            propertyLng = property['longitude'] is String
-                ? double.tryParse(property['longitude']) ?? 0.0
-                : (property['longitude'] ?? 0.0);
-          }
-
-          // Calculate distance if coordinates are valid
-          if (propertyLat != 0.0 && propertyLng != 0.0) {
-            double distance = _calculateDistance(
-                latitude, longitude, propertyLat, propertyLng);
-            property['distance'] = distance;
-          } else {
-            property['distance'] =
-                double.infinity; // Put at the end of the list
+        LocationPermission permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.denied) {
+          permission = await Geolocator.requestPermission();
+          if (permission == LocationPermission.denied) {
+            setState(() {
+              _isLoadingProperties = false;
+              _locationError = 'Location permissions are denied';
+            });
+            return;
           }
         }
 
-        // Sort by distance
-        propertiesData.sort((a, b) =>
-            (a['distance'] as double).compareTo(b['distance'] as double));
+        if (permission == LocationPermission.deniedForever) {
+          setState(() {
+            _isLoadingProperties = false;
+            _locationError = 'Location permissions are permanently denied';
+          });
+          return;
+        }
+
+        position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+        );
       }
+
+      // Fetch properties from Supabase
+      final response = await _supabase
+          .from('properties')
+          .select('*, property_photos(photo_url, photo_order)')
+          .order('created_at', ascending: false)
+          .limit(20);
+
+      if (response == null) {
+        setState(() {
+          _nearbyProperties = [];
+          _isLoadingProperties = false;
+        });
+        return;
+      }
+
+      List<Map<String, dynamic>> propertiesData = List<Map<String, dynamic>>.from(response);
+
+      // Calculate distance for each property and filter nearby ones
+      propertiesData = propertiesData.where((property) {
+        if (property['latitude'] == null || property['longitude'] == null) {
+          return false;
+        }
+
+        double propertyLat = property['latitude'] is String
+                ? double.tryParse(property['latitude']) ?? 0.0
+                : (property['latitude'] ?? 0.0);
+
+        double propertyLng = property['longitude'] is String
+                ? double.tryParse(property['longitude']) ?? 0.0
+                : (property['longitude'] ?? 0.0);
+
+            double distance = _calculateDistance(
+          position!.latitude,
+          position!.longitude,
+          propertyLat,
+          propertyLng,
+        );
+
+        // Only include properties within 10km radius
+        return distance <= 10.0;
+      }).toList();
+
+        // Sort by distance
+      propertiesData.sort((a, b) {
+        double distanceA = _calculateDistance(
+          position!.latitude,
+          position!.longitude,
+          a['latitude'] is String ? double.tryParse(a['latitude']) ?? 0.0 : (a['latitude'] ?? 0.0),
+          a['longitude'] is String ? double.tryParse(a['longitude']) ?? 0.0 : (a['longitude'] ?? 0.0),
+        );
+        double distanceB = _calculateDistance(
+          position!.latitude,
+          position!.longitude,
+          b['latitude'] is String ? double.tryParse(b['latitude']) ?? 0.0 : (b['latitude'] ?? 0.0),
+          b['longitude'] is String ? double.tryParse(b['longitude']) ?? 0.0 : (b['longitude'] ?? 0.0),
+        );
+        return distanceA.compareTo(distanceB);
+      });
 
       // Format properties for display
       _nearbyProperties = propertiesData.map((property) {
@@ -259,19 +302,29 @@ class _HomeTabContentState extends State<HomeTabContent> {
         String area = property['area'] != null
             ? '${property['area']} sq.ft.'
             : 'Area not specified';
-        String image = property['image_url'] ??
-            'https://images.unsplash.com/photo-1480074568708-e7b720bb3f09?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1474&q=80';
-
-        String distance = '';
-        if (property.containsKey('distance') &&
-            property['distance'] != double.infinity) {
-          distance = '${property['distance'].toStringAsFixed(1)} km away';
+        
+        // Get the first image URL from property_photos if available
+        String image = 'assets/image1.jpg'; // Default image
+        if (property['property_photos'] != null && 
+            property['property_photos'].isNotEmpty) {
+          // Sort photos by photo_order and get the first one
+          final sortedPhotos = List<Map<String, dynamic>>.from(property['property_photos'])
+              ..sort((a, b) => (a['photo_order'] ?? 0).compareTo(b['photo_order'] ?? 0));
+          image = sortedPhotos.first['photo_url'] ?? 'assets/image1.jpg';
         }
+
+        // Calculate distance for display
+        double distance = _calculateDistance(
+          position!.latitude,
+          position!.longitude,
+          property['latitude'] is String ? double.tryParse(property['latitude']) ?? 0.0 : (property['latitude'] ?? 0.0),
+          property['longitude'] is String ? double.tryParse(property['longitude']) ?? 0.0 : (property['longitude'] ?? 0.0),
+        );
 
         return {
           'id': property['id'] ?? '',
           'name': title,
-          'location': city + (distance.isNotEmpty ? ' • $distance' : ''),
+          'location': city + ' • ${distance.toStringAsFixed(1)} km away',
           'price': price,
           'type': property['property_type'] ?? 'House',
           'image': image,
@@ -279,23 +332,23 @@ class _HomeTabContentState extends State<HomeTabContent> {
           'bathrooms': bathroom,
           'area': area,
           'isFavorite': false,
+          'description': property['description'] ?? '',
+          'created_at': property['created_at'] ?? DateTime.now().toIso8601String(),
         };
       }).toList();
 
-      // If no properties found or error, use mock data
-      if (_nearbyProperties.isEmpty) {
-        _nearbyProperties = _getMockNearbyProperties();
-      }
+      // Check favorite status for all properties
+      await _checkFavoriteStatus(_nearbyProperties);
 
       setState(() {
         _isLoadingProperties = false;
       });
     } catch (e) {
       print('Error loading properties: $e');
-      // Use mock data as fallback
       setState(() {
-        _nearbyProperties = _getMockNearbyProperties();
         _isLoadingProperties = false;
+        _nearbyProperties = [];
+        _locationError = 'Error loading properties: $e';
       });
     }
   }
@@ -355,19 +408,57 @@ $message
     );
   }
 
-  void _navigateToPropertyDetails(String propertyId) {
-    // Find the property in the list
-    final property = _nearbyProperties.firstWhere(
-      (p) => p['id'] == propertyId,
-      orElse: () => _getMockNearbyProperties().first,
-    );
+  void _navigateToPropertyDetails(String propertyId) async {
+    try {
+      // Fetch the complete property data including photos
+      final response = await _supabase
+          .from('properties')
+          .select('*, property_photos(*)')
+          .eq('id', propertyId)
+          .single();
 
-    Navigator.push(
+      if (response != null) {
+        // Format the property data
+        final property = {
+          'id': response['id'] ?? '',
+          'name': response['title'] ?? 'Property',
+          'location': response['city'] ?? 'Unknown City',
+          'price': response['price'] != null ? '₹${response['price']}' : 'Price on request',
+          'type': response['property_type'] ?? 'House',
+          'bedrooms': response['bedrooms']?.toString() ?? '0',
+          'bathrooms': response['bathrooms']?.toString() ?? '0',
+          'area': response['area'] != null ? '${response['area']} sq.ft.' : 'Area not specified',
+          'isFavorite': false,
+          'description': response['description'] ?? '',
+          'created_at': response['created_at'] ?? DateTime.now().toIso8601String(),
+          'image': response['property_photos'] != null && 
+                  response['property_photos'].isNotEmpty
+              ? response['property_photos'][0]['photo_url']
+              : 'assets/image1.jpg',
+        };
+
+        // Navigate to property details and wait for result
+        final result = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => PropertyDetailsPage(property: property),
       ),
     );
+
+        // If property was edited (result is true), refresh the properties list
+        if (result == true) {
+          _loadNearbyProperties();
+        }
+      }
+    } catch (e) {
+      print('Error fetching property details: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading property details: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   // Helper method to check if a string is a valid UUID
@@ -387,11 +478,16 @@ $message
       // User not logged in, prompt to login
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Please log in to save favorites'),
+          content: Text(
+            'Please log in to save favorites',
+            style: GoogleFonts.raleway(),
+          ),
           action: SnackBarAction(
             label: 'Login',
-            onPressed: () => Navigator.pushNamed(context, '/login'),
+            onPressed: () => Get.offAllNamed('/login'),
+            textColor: const Color(0xFF7C8500),
           ),
+          backgroundColor: Colors.white,
         ),
       );
       return;
@@ -405,121 +501,70 @@ $message
         throw Exception('Property ID is missing');
       }
 
-      // Check if the property ID is a valid UUID or needs conversion
-      String formattedPropertyId;
-
-      if (!_isValidUuid(propertyId.toString())) {
-        print(
-            'Invalid UUID format: $propertyId, creating property in database first');
-
-        // Create a new property entry with a valid UUID
-        final newProperty = {
-          'title': property['name'] ?? 'Property',
-          'description':
-              'Beautiful property in ${property['location'] ?? 'Unknown location'}',
-          'price': property['price'] != null
-              ? double.tryParse(property['price']
-                      .toString()
-                      .replaceAll(RegExp(r'[^\d.]'), '')) ??
-                  0
-              : 0,
-          'city': property['location']?.toString().split(',').first.trim() ??
-              'Unknown',
-          'state': property['location']?.toString().contains(',') == true
-              ? property['location'].toString().split(',').last.trim()
-              : 'Unknown',
-          'country': 'India',
-          'address': 'Address details',
-          'zip_code': '411000',
-          'property_type': property['type'] ?? 'House',
-          'bedrooms':
-              int.tryParse(property['bedrooms']?.toString() ?? '0') ?? 3,
-          'bathrooms':
-              double.tryParse(property['bathrooms']?.toString() ?? '0') ?? 2,
-          'area': double.tryParse(property['area']
-                      ?.toString()
-                      .replaceAll(RegExp(r'[^\d.]'), '') ??
-                  '0') ??
-              1200,
-          'owner_id': user.id, // Set the current user as owner
-          'created_at': DateTime.now().toIso8601String(),
-          // Add required fields from database schema
-          'status': 'available',
-        };
-
-        // Insert the property and get the UUID
-        final propertyResponse = await client
-            .from('properties')
-            .insert(newProperty)
-            .select('id')
-            .single();
-
-        formattedPropertyId = propertyResponse['id'];
-
-        // Update the property in our widget
-        property['id'] = formattedPropertyId;
-
-        print('Created property with UUID: $formattedPropertyId');
-      } else {
-        formattedPropertyId = propertyId.toString();
-      }
-
       // Check if the property is already in favorites
       final response = await client
           .from('favorites')
           .select()
           .eq('user_id', user.id)
-          .eq('property_id', formattedPropertyId)
+          .eq('property_id', propertyId)
           .maybeSingle();
 
       if (response != null) {
         // Remove from favorites
         await client.from('favorites').delete().match({
           'user_id': user.id,
-          'property_id': formattedPropertyId,
+          'property_id': propertyId,
         });
 
         // Update UI state
-        int index =
-            _nearbyProperties.indexWhere((p) => p['id'] == property['id']);
-        if (index != -1) {
           setState(() {
-            _nearbyProperties[index]['isFavorite'] = false;
+          // Update in nearby properties
+          int nearbyIndex = _nearbyProperties.indexWhere((p) => p['id'] == propertyId);
+          if (nearbyIndex != -1) {
+            _nearbyProperties[nearbyIndex]['isFavorite'] = false;
+          }
           });
-        }
 
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Removed from favorites'),
-            duration: Duration(seconds: 2),
+          SnackBar(
+            content: Text(
+              'Removed from favorites',
+              style: GoogleFonts.raleway(),
+            ),
+            duration: const Duration(seconds: 2),
+            backgroundColor: Colors.white,
           ),
         );
       } else {
         // Add to favorites
         await client.from('favorites').insert({
           'user_id': user.id,
-          'property_id': formattedPropertyId,
+          'property_id': propertyId,
           'created_at': DateTime.now().toIso8601String(),
         });
 
         // Update UI state
-        int index =
-            _nearbyProperties.indexWhere((p) => p['id'] == property['id']);
-        if (index != -1) {
           setState(() {
-            _nearbyProperties[index]['isFavorite'] = true;
+          // Update in nearby properties
+          int nearbyIndex = _nearbyProperties.indexWhere((p) => p['id'] == propertyId);
+          if (nearbyIndex != -1) {
+            _nearbyProperties[nearbyIndex]['isFavorite'] = true;
+          }
           });
-        }
 
-        // Show confirmation and option to view favorites
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Added to favorites'),
+            content: Text(
+              'Added to favorites',
+              style: GoogleFonts.raleway(),
+            ),
             duration: const Duration(seconds: 2),
             action: SnackBarAction(
               label: 'View All',
               onPressed: () => Navigator.pushNamed(context, '/favorites'),
+              textColor: const Color(0xFF7C8500),
             ),
+            backgroundColor: Colors.white,
           ),
         );
       }
@@ -527,10 +572,42 @@ $message
       print('Error toggling favorite status: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error: ${e.toString()}'),
+          content: Text(
+            'Error: ${e.toString()}',
+            style: GoogleFonts.raleway(color: Colors.white),
+          ),
           backgroundColor: Colors.red,
         ),
       );
+    }
+  }
+
+  // Add this method to check favorite status when loading properties
+  Future<void> _checkFavoriteStatus(List<Map<String, dynamic>> properties) async {
+    final user = _supabase.auth.currentUser;
+    if (user == null) return;
+
+    try {
+      // Get all favorites for the current user
+      final favorites = await _supabase
+          .from('favorites')
+          .select('property_id')
+          .eq('user_id', user.id);
+
+      if (favorites != null) {
+        // Create a set of favorite property IDs for quick lookup
+        final favoriteIds = Set<String>.from(
+            favorites.map((f) => f['property_id'].toString()));
+
+        // Update the favorite status for each property
+        setState(() {
+          for (var property in properties) {
+            property['isFavorite'] = favoriteIds.contains(property['id'].toString());
+          }
+        });
+      }
+    } catch (e) {
+      print('Error checking favorite status: $e');
     }
   }
 
@@ -738,52 +815,130 @@ $message
   Widget _buildFeaturedEstatesSection() {
     return Obx(() {
       final isAdmin = _authController.isAdmin.value;
+      return FutureBuilder<List<Map<String, dynamic>>>(
+        future: _fetchFeaturedProperties(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(color: Color(0xFF7C8500)),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                'Error loading featured properties',
+                style: GoogleFonts.raleway(color: Colors.red),
+              ),
+            );
+          }
+
+          final featuredProperties = snapshot.data ?? [];
+
+          if (featuredProperties.isEmpty) {
+            return Center(
+              child: Text(
+                'No featured properties available',
+                style: GoogleFonts.raleway(color: Colors.grey),
+              ),
+            );
+          }
+
       return SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
-          children: [
-            GestureDetector(
+              children: featuredProperties.map((property) {
+                return Padding(
+                  padding: const EdgeInsets.only(right: 16),
+                  child: GestureDetector(
               onTap: () {
-                _navigateToPropertyDetails('4');
+                      _navigateToPropertyDetails(property['id']);
               },
               child: FeaturedEstateCard(
-                imageUrl: 'assets/property (3).jpg',
-                estateName: 'Sky Dandelions Apartment',
-                location: 'Jakarta, Indonesia',
-                price: 290,
-                onDelete: isAdmin ? () => _deleteFeaturedEstate('4') : null,
+                      imageUrl: property['image'] ?? 'assets/image1.jpg',
+                      estateName: property['name'] ?? 'Property',
+                      location: property['location'] ?? 'Unknown Location',
+                      price: int.tryParse(property['price']?.toString().replaceAll(RegExp(r'[^\d]'), '') ?? '0') ?? 0,
+                      propertyId: property['id'],
+                      isFavorite: property['isFavorite'] ?? false,
+                      onFavorite: (isFavorite) async {
+                        await _togglePropertyFavorite({
+                          ...property,
+                          'isFavorite': isFavorite,
+                        });
+                      },
+                      onDelete: isAdmin ? () => _deleteFeaturedEstate(property['id']) : null,
               ),
             ),
-            const SizedBox(width: 16),
-            GestureDetector(
-              onTap: () {
-                _navigateToPropertyDetails('5');
-              },
-              child: FeaturedEstateCard(
-                imageUrl: 'assets/property (4).jpg',
-                estateName: 'New Moon Resort',
-                location: 'Bali, Indonesia',
-                price: 1500,
-                onDelete: isAdmin ? () => _deleteFeaturedEstate('5') : null,
-              ),
-            ),
-            const SizedBox(width: 16),
-            GestureDetector(
-              onTap: () {
-                _navigateToPropertyDetails('6');
-              },
-              child: FeaturedEstateCard(
-                imageUrl: 'assets/property (5).jpg',
-                estateName: 'Pineapple Hill',
-                location: 'Bali, Indonesia',
-                price: 2000,
-                onDelete: isAdmin ? () => _deleteFeaturedEstate('6') : null,
-              ),
-            ),
-          ],
+                );
+              }).toList(),
         ),
+          );
+        },
       );
     });
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchFeaturedProperties() async {
+    try {
+      final response = await _supabase
+          .from('properties')
+          .select('*, property_photos(photo_url, photo_order)')
+          .order('created_at', ascending: false)
+          .limit(3);
+
+      if (response == null) return [];
+
+      List<Map<String, dynamic>> properties = List<Map<String, dynamic>>.from(response).map((property) {
+        String city = property['city'] ?? 'Unknown City';
+        String title = property['title'] ?? 'Property';
+        String price = property['price'] != null
+            ? '₹${property['price']}'
+            : 'Price on request';
+        
+        // Get the first image URL from property_photos if available
+        String image = 'assets/image1.jpg'; // Default image
+        if (property['property_photos'] != null && 
+            property['property_photos'].isNotEmpty) {
+          // Sort photos by photo_order and get the first one
+          final sortedPhotos = List<Map<String, dynamic>>.from(property['property_photos'])
+              ..sort((a, b) => (a['photo_order'] ?? 0).compareTo(b['photo_order'] ?? 0));
+          image = sortedPhotos.first['photo_url'] ?? 'assets/image1.jpg';
+        }
+
+        return {
+          'id': property['id'] ?? '',
+          'name': title,
+          'location': city,
+          'price': price,
+          'image': image,
+          'isFavorite': false,
+        };
+      }).toList();
+
+      // Check favorite status for each property
+      final user = _supabase.auth.currentUser;
+      if (user != null) {
+        final favorites = await _supabase
+            .from('favorites')
+            .select('property_id')
+            .eq('user_id', user.id);
+
+        if (favorites != null) {
+          final favoriteIds = Set<String>.from(
+              favorites.map((f) => f['property_id'].toString()));
+
+          for (var property in properties) {
+            property['isFavorite'] = favoriteIds.contains(property['id'].toString());
+          }
+        }
+      }
+
+      return properties;
+    } catch (e) {
+      print('Error fetching featured properties: $e');
+      return [];
+    }
   }
 
   @override

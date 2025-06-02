@@ -6,6 +6,7 @@ import 'package:best/screens/filter_page.dart';
 import 'package:best/screens/property_detail.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:get/get.dart';
+import 'package:best/presentation/controllers/auth_controller.dart';
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -17,46 +18,74 @@ class SearchPage extends StatefulWidget {
 class _SearchPageState extends State<SearchPage> {
   bool isGridView = true;
   final TextEditingController _searchController = TextEditingController();
-
-  final List<String> locationSuggestions = [
-    'Wagholi',
-    'Viman Nagar',
-    'Kharadi',
-    'Hinjewadi',
-    'Baner',
-    'Koregaon Park',
-    'Hadapsar',
-    'Pashan',
-    'Kondhwa',
-    'Shivaji Nagar',
-  ];
-
-  final List<String> propertyImages = [
-    'assets/image1.jpg',
-    'assets/image2.jpg',
-    'assets/image3.jpg',
-    'assets/image4.jpg',
-  ];
-
-  late List<Map<String, dynamic>> properties;
-  late List<Map<String, dynamic>> filteredProperties;
+  final SupabaseClient _supabase = Supabase.instance.client;
+  final _authController = Get.find<AuthController>();
+  bool _isLoading = true;
+  List<Map<String, dynamic>> properties = [];
+  List<Map<String, dynamic>> filteredProperties = [];
 
   @override
   void initState() {
     super.initState();
-    properties = List.generate(
-      24,
-      (index) => {
-        'name': 'House ${index + 1}',
-        'price': 200 + index * 10,
-        'location': locationSuggestions[index % locationSuggestions.length],
-        'rating': 4.5 + (index % 5) * 0.1,
-        'image': propertyImages[index % propertyImages.length],
-        'isFavorite': false,
-        'type': ['House', 'Apartment', 'Villa'][index % 3],
-      },
-    );
-    filteredProperties = List.from(properties);
+    _loadProperties();
+  }
+
+  Future<void> _loadProperties() async {
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+
+      final response = await _supabase
+            .from('properties')
+          .select('*, property_photos(photo_url, photo_order)')
+          .order('created_at', ascending: false);
+
+      if (response != null) {
+        properties = List<Map<String, dynamic>>.from(response).map((property) {
+          String city = property['city'] ?? 'Unknown City';
+          String title = property['title'] ?? 'Property';
+          String price = property['price'] != null
+              ? '₹${property['price']}'
+              : 'Price on request';
+          
+          // Get the first image URL from property_photos if available
+          String image = 'assets/image1.jpg'; // Default image
+          if (property['property_photos'] != null && 
+              property['property_photos'].isNotEmpty) {
+            // Sort photos by photo_order and get the first one
+            final sortedPhotos = List<Map<String, dynamic>>.from(property['property_photos'])
+                ..sort((a, b) => (a['photo_order'] ?? 0).compareTo(b['photo_order'] ?? 0));
+            image = sortedPhotos.first['photo_url'] ?? 'assets/image1.jpg';
+          }
+
+          return {
+            'id': property['id'] ?? '',
+            'name': title,
+            'location': city,
+            'price': price,
+            'type': property['property_type'] ?? 'House',
+            'image': image,
+            'bedrooms': property['bedrooms']?.toString() ?? '0',
+            'bathrooms': property['bathrooms']?.toString() ?? '0',
+            'area': property['area'] != null
+                ? '${property['area']} sq.ft.'
+                : 'Area not specified',
+            'isFavorite': false,
+            'description': property['description'] ?? '',
+            'created_at': property['created_at'] ?? DateTime.now().toIso8601String(),
+          };
+        }).toList();
+      }
+
+      filteredProperties = List.from(properties);
+    } catch (e) {
+      print('Error loading properties: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   void _onSearchChanged(String query) {
@@ -86,17 +115,97 @@ class _SearchPageState extends State<SearchPage> {
         builder: (context) => FilterPage(
           initialLocation: '',
           initialType: 'All',
-          onApply: (filters) {
+          onApply: (filters) async {
             setState(() {
-              // Apply the filters
-              filteredProperties = properties.where((property) {
-                bool matchesLocation = filters['location'].isEmpty ||
-                    property['location'] == filters['location'];
-                bool matchesType = filters['propertyType'] == 'All' ||
-                    property['type'] == filters['propertyType'];
-                return matchesLocation && matchesType;
-              }).toList();
+              _isLoading = true;
             });
+
+            try {
+              // Build the query based on filters
+              var query = _supabase
+                  .from('properties')
+                  .select('*, property_photos(photo_url, photo_order)');
+
+              // Add property type filter if not 'All'
+              if (filters['propertyType'] != 'All') {
+                query = query.eq('property_type', filters['propertyType']);
+              }
+
+              // Add location filter if specified
+              if (filters['location'] != null && filters['location'].isNotEmpty) {
+                query = query.eq('city', filters['location']);
+              }
+
+              // Execute the query
+              final response = await query.order('created_at', ascending: false);
+
+              if (response != null) {
+                // Process the filtered properties
+                final filteredProps = List<Map<String, dynamic>>.from(response).map((property) {
+                  String city = property['city'] ?? 'Unknown City';
+                  String title = property['title'] ?? 'Property';
+                  String price = property['price'] != null
+                      ? '₹${property['price']}'
+                      : 'Price on request';
+                  
+                  // Get the first image URL from property_photos if available
+                  String image = 'assets/image1.jpg'; // Default image
+                  if (property['property_photos'] != null && 
+                      property['property_photos'].isNotEmpty) {
+                    final sortedPhotos = List<Map<String, dynamic>>.from(property['property_photos'])
+                        ..sort((a, b) => (a['photo_order'] ?? 0).compareTo(b['photo_order'] ?? 0));
+                    image = sortedPhotos.first['photo_url'] ?? 'assets/image1.jpg';
+                  }
+
+                  return {
+                    'id': property['id'] ?? '',
+                    'name': title,
+                    'location': city,
+                    'price': price,
+                    'type': property['property_type'] ?? 'House',
+                    'image': image,
+                    'bedrooms': property['bedrooms']?.toString() ?? '0',
+                    'bathrooms': property['bathrooms']?.toString() ?? '0',
+                    'area': property['area'] != null
+                        ? '${property['area']} sq.ft.'
+                        : 'Area not specified',
+                    'isFavorite': false,
+                    'description': property['description'] ?? '',
+                    'created_at': property['created_at'] ?? DateTime.now().toIso8601String(),
+                  };
+              }).toList();
+
+                setState(() {
+                  filteredProperties = filteredProps;
+                  _isLoading = false;
+                });
+
+                // Show filter results message
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Found ${filteredProps.length} properties matching your criteria',
+                      style: GoogleFonts.raleway(),
+                    ),
+                    backgroundColor: const Color(0xFF7C8500),
+                  ),
+                );
+              }
+            } catch (e) {
+              print('Error applying filters: $e');
+              setState(() {
+                _isLoading = false;
+            });
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Error applying filters: ${e.toString()}',
+                    style: GoogleFonts.raleway(color: Colors.white),
+                  ),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
           },
         ),
       ),
@@ -108,7 +217,11 @@ class _SearchPageState extends State<SearchPage> {
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: _buildAppBar(),
-      body: Padding(
+      body: _isLoading
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFF7C8500)),
+            )
+          : Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16.0),
         child: Column(
           children: [
@@ -254,7 +367,7 @@ class _SearchPageState extends State<SearchPage> {
       child: Card(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         elevation: 4,
-        color: Colors.white,
+        color: const Color(0xFFF5F4F8),
         child: Stack(
           children: [
             Column(
@@ -263,13 +376,55 @@ class _SearchPageState extends State<SearchPage> {
                 ClipRRect(
                   borderRadius:
                       const BorderRadius.vertical(top: Radius.circular(12)),
-                  child: Image.asset(
-                    'assets/image1.jpg',
+                  child: Image.network(
+                    property['image'],
                     height: 120,
                     width: double.infinity,
                     fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) =>
-                        const Icon(Icons.error, size: 100, color: Colors.red),
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return Container(
+                        height: 120,
+                        width: double.infinity,
+                        color: Colors.grey[200],
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            value: loadingProgress.expectedTotalBytes != null
+                                ? loadingProgress.cumulativeBytesLoaded /
+                                    loadingProgress.expectedTotalBytes!
+                                : null,
+                            color: const Color(0xFF7C8500),
+                          ),
+                        ),
+                      );
+                    },
+                    errorBuilder: (context, error, stackTrace) {
+                      print('Image loading error: $error');
+                      print('Image URL: ${property['image']}');
+                      return Container(
+                        height: 120,
+                        width: double.infinity,
+                        color: Colors.grey[200],
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(
+                              Icons.error_outline,
+                              color: Colors.red,
+                              size: 40,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Error loading image',
+                              style: GoogleFonts.raleway(
+                                color: Colors.red,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ),
                 Padding(
@@ -282,7 +437,7 @@ class _SearchPageState extends State<SearchPage> {
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
                               color: const Color(0xFF7C8500))),
-                      Text("\$${property['price']}/month",
+                      Text("\$${property['price']}",
                           style: GoogleFonts.raleway(
                               color: const Color(0xFF7C8500),
                               fontWeight: FontWeight.bold)),
@@ -321,7 +476,38 @@ class _SearchPageState extends State<SearchPage> {
             Positioned(
               top: 8,
               right: 8,
-              child: GestureDetector(
+              child: Row(
+                children: [
+                  // Delete button (only for admin)
+                  Obx(() => _authController.isAdmin.value
+                      ? GestureDetector(
+                          onTap: () => _deleteProperty(property),
+                          child: Container(
+                            width: 30,
+                            height: 30,
+                            margin: const EdgeInsets.only(right: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            child: const Center(
+                              child: Icon(
+                                Icons.delete,
+                                size: 16,
+                                color: Colors.red,
+                              ),
+                            ),
+                          ),
+                        )
+                      : const SizedBox.shrink()),
+                  // Favorite button
+                  GestureDetector(
                 onTap: () => _toggleFavorite(index),
                 child: Container(
                   width: 30,
@@ -346,6 +532,8 @@ class _SearchPageState extends State<SearchPage> {
                     ),
                   ),
                 ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -354,7 +542,7 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  void _toggleFavorite(int index) async {
+  Future<void> _toggleFavorite(int index) async {
     final currentProperty = filteredProperties[index];
     final newFavoriteStatus = !(currentProperty['isFavorite'] ?? false);
 
@@ -383,8 +571,7 @@ class _SearchPageState extends State<SearchPage> {
 
     // Find the index in the original properties list
     final int originalIndex = properties.indexWhere((p) =>
-        p['name'] == currentProperty['name'] &&
-        p['location'] == currentProperty['location']);
+        p['id'] == currentProperty['id']);
 
     // Optimistically update UI
     setState(() {
@@ -397,52 +584,11 @@ class _SearchPageState extends State<SearchPage> {
     });
 
     try {
-      // First, we need to ensure the property exists in the properties table
-      // with a valid UUID
-      String propertyId;
-
-      if (currentProperty['id'] == null ||
-          !_isValidUuid(currentProperty['id'])) {
-        // Create a new property entry with a valid UUID
-        final newProperty = {
-          'title': currentProperty['name'],
-          'price': currentProperty['price'],
-          'city': currentProperty['location'].split(',')[0].trim(),
-          'state': currentProperty['location'].contains(',')
-              ? currentProperty['location'].split(',')[1].trim()
-              : '',
-          'property_type': currentProperty['type'] ?? 'House',
-          'bedrooms': currentProperty['bedrooms'] ?? 3,
-          'bathrooms': currentProperty['bathrooms'] ?? 2,
-          'image_url': currentProperty['image'],
-          'created_at': DateTime.now().toIso8601String(),
-        };
-
-        // Insert the property and get the UUID
-        final propertyResponse = await client
-            .from('properties')
-            .insert(newProperty)
-            .select('id')
-            .single();
-
-        propertyId = propertyResponse['id'];
-
-        // Update the property in our list with the new ID
-        setState(() {
-          filteredProperties[index]['id'] = propertyId;
-          if (originalIndex != -1) {
-            properties[originalIndex]['id'] = propertyId;
-          }
-        });
-      } else {
-        propertyId = currentProperty['id'];
-      }
-
       if (newFavoriteStatus) {
-        // Add to favorites using valid UUID
+        // Add to favorites
         await client.from('favorites').insert({
-          'user_id': user.id, // This is already a valid UUID
-          'property_id': propertyId,
+          'user_id': user.id,
+          'property_id': currentProperty['id'],
           'created_at': DateTime.now().toIso8601String(),
         });
 
@@ -465,7 +611,7 @@ class _SearchPageState extends State<SearchPage> {
         // Remove from favorites
         await client.from('favorites').delete().match({
           'user_id': user.id,
-          'property_id': propertyId,
+          'property_id': currentProperty['id'],
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -502,12 +648,114 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
-  // Helper method to check if a string is a valid UUID
-  bool _isValidUuid(String str) {
-    final uuidRegex = RegExp(
-      r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-      caseSensitive: false,
+  Future<void> _deleteProperty(Map<String, dynamic> property) async {
+    // Show confirmation dialog
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(
+            'Delete Property',
+            style: GoogleFonts.raleway(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: Text(
+            'Are you sure you want to delete this property? This action cannot be undone.',
+            style: GoogleFonts.raleway(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(
+                'Cancel',
+                style: GoogleFonts.raleway(),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(
+                'Delete',
+                style: GoogleFonts.raleway(
+                  color: Colors.red,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
-    return uuidRegex.hasMatch(str);
+
+    if (shouldDelete != true) return;
+
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+
+      final propertyId = property['id'];
+
+      // Delete property photos first (due to foreign key constraint)
+      await _supabase
+          .from('property_photos')
+          .delete()
+          .eq('property_id', propertyId);
+
+      // Delete favorites related to this property
+      await _supabase
+          .from('favorites')
+          .delete()
+          .eq('property_id', propertyId);
+
+      // Delete property inquiries
+      await _supabase
+          .from('property_inquiries')
+          .delete()
+          .eq('property_id', propertyId);
+
+      // Finally, delete the property itself
+      await _supabase
+          .from('properties')
+          .delete()
+          .eq('id', propertyId);
+
+      // Remove from local lists
+      setState(() {
+        properties.removeWhere((p) => p['id'] == propertyId);
+        filteredProperties.removeWhere((p) => p['id'] == propertyId);
+        _isLoading = false;
+      });
+
+      // Show success message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Property deleted successfully',
+              style: GoogleFonts.raleway(color: Colors.white),
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+
+      // Show error message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Error deleting property: ${e.toString()}',
+              style: GoogleFonts.raleway(color: Colors.white),
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 }

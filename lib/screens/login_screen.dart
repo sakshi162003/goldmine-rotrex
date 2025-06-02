@@ -80,7 +80,7 @@ class LoginScreenState extends State<LoginScreen> {
           final currentUser = Supabase.instance.client.auth.currentUser;
           if (currentUser == null) {
             print("Auth state lost after admin setup, redirecting to login");
-            _showLoginErrorDialog("Authentication session expired. Please login again.");
+            _showLoginErrorDialog("Invalid Credentials");
             return;
           }
           
@@ -100,56 +100,88 @@ class LoginScreenState extends State<LoginScreen> {
     } else {
       print("Login failed: $result");
       
-      // Special handling for admin login failure
-      if (isAdminLogin) {
-        _showAdminLoginFailureDialog();
-      } else {
-        _authController.showError(result);
-      }
+      // Show simple error message
+      _showLoginErrorDialog("Invalid Credentials");
     }
   }
   
   void _showLoginErrorDialog(String message) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Login Error'),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK'),
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 15,
+                spreadRadius: 5,
           ),
         ],
       ),
-    );
-  }
-  
-  void _showAdminLoginFailureDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Admin Login Failed'),
-        content: const Column(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Failed to login as admin.'),
-            SizedBox(height: 10),
-            Text('Possible reasons:'),
-            SizedBox(height: 5),
-            Text('• The admin account may not exist in the database'),
-            Text('• There might be a profile mismatch'),
-            SizedBox(height: 10),
-            Text('Run the admin user SQL query to fix this issue.'),
-          ],
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFB8C100).withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.error_outline,
+                  color: Color(0xFFB8C100),
+                  size: 40,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  foreground: Paint()
+                    ..shader = const LinearGradient(
+                      colors: [
+                        Color(0xFFF3F717),
+                        Color(0xFF898B10),
+                        Color(0xFF52530D),
+                      ],
+                    ).createShader(const Rect.fromLTWH(0.0, 0.0, 200.0, 70.0)),
+                ),
         ),
-        actions: [
-          TextButton(
+              const SizedBox(height: 20),
+              ElevatedButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFB8C100),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  elevation: 0,
+                ),
+                child: const Text(
+                  'Try Again',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
           ),
         ],
+          ),
+        ),
       ),
     );
   }

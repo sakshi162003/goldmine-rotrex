@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class FeaturedEstateCard extends StatefulWidget {
   final String imageUrl;
   final String estateName;
   final String location;
   final int price;
-  final VoidCallback? onDelete; // Delete callback
+  final VoidCallback? onDelete;
+  final String propertyId;
+  final bool isFavorite;
+  final Function(bool) onFavorite;
 
   const FeaturedEstateCard({
     super.key,
@@ -14,6 +18,9 @@ class FeaturedEstateCard extends StatefulWidget {
     required this.estateName,
     required this.location,
     required this.price,
+    required this.propertyId,
+    required this.isFavorite,
+    required this.onFavorite,
     this.onDelete,
   });
 
@@ -22,7 +29,30 @@ class FeaturedEstateCard extends StatefulWidget {
 }
 
 class _FeaturedEstateCardState extends State<FeaturedEstateCard> {
-  bool isFavorite = false;
+  final SupabaseClient _supabase = Supabase.instance.client;
+  String? _imageUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadImage();
+  }
+
+  Future<void> _loadImage() async {
+    try {
+      if (widget.imageUrl.isNotEmpty) {
+        setState(() {
+          _imageUrl = widget.imageUrl;
+        });
+      }
+    } catch (e) {
+      print('Error loading image: $e');
+      print('Image URL: ${widget.imageUrl}');
+      setState(() {
+        _imageUrl = null;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,11 +80,66 @@ class _FeaturedEstateCardState extends State<FeaturedEstateCard> {
                   topLeft: Radius.circular(16),
                   topRight: Radius.circular(16),
                 ),
-                child: Image.asset(
-                  widget.imageUrl,
+                child: _imageUrl != null
+                    ? Image.network(
+                        _imageUrl!,
                   height: 120,
                   width: double.infinity,
                   fit: BoxFit.cover,
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Container(
+                            height: 120,
+                            width: double.infinity,
+                            color: Colors.grey[200],
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                value: loadingProgress.expectedTotalBytes != null
+                                    ? loadingProgress.cumulativeBytesLoaded /
+                                        loadingProgress.expectedTotalBytes!
+                                    : null,
+                                color: const Color(0xFF7C8500),
+                              ),
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) {
+                          print('Image loading error: $error');
+                          print('Image URL: $_imageUrl');
+                          return Container(
+                            height: 120,
+                            width: double.infinity,
+                            color: Colors.grey[200],
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.error_outline,
+                                  color: Colors.red,
+                                  size: 40,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Error loading image',
+                                  style: GoogleFonts.raleway(
+                                    color: Colors.red,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      )
+                    : Container(
+                        height: 120,
+                        width: double.infinity,
+                        color: Colors.grey[200],
+                        child: const Center(
+                          child: CircularProgressIndicator(
+                            color: Color(0xFF7C8500),
+                          ),
+                        ),
                 ),
               ),
               // Estate Details
@@ -113,11 +198,7 @@ class _FeaturedEstateCardState extends State<FeaturedEstateCard> {
             top: 8,
             right: 8,
             child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  isFavorite = !isFavorite;
-                });
-              },
+              onTap: () => widget.onFavorite(!widget.isFavorite),
               child: Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
@@ -132,9 +213,9 @@ class _FeaturedEstateCardState extends State<FeaturedEstateCard> {
                   ],
                 ),
                 child: Icon(
-                  isFavorite ? Icons.favorite : Icons.favorite_border,
+                  widget.isFavorite ? Icons.favorite : Icons.favorite_border,
                   size: 18,
-                  color: isFavorite ? Colors.red : Colors.grey,
+                  color: widget.isFavorite ? Colors.red : Colors.grey,
                 ),
               ),
             ),

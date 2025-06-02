@@ -59,31 +59,39 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
       // Get all property IDs from favorites
       final propertyIds = response.map((item) => item['property_id']).toList();
 
-      // Fetch properties using the IDs
+      // Fetch properties with their photos using the IDs
       final propertiesResponse = await client
           .from('properties')
-          .select()
+          .select('*, property_photos(*)')
           .in_('id', propertyIds);
 
       // Process response and format properties
       List<Map<String, dynamic>> formattedProperties = [];
 
       for (var property in propertiesResponse) {
-        // Format the property data for display
-        formattedProperties.add({
-          'id': property['id'],
-          'name': property['title'] ?? 'Property',
-          'price': property['price'] ?? 0,
-          'location': property['city'] != null && property['state'] != null
-              ? '${property['city']}, ${property['state']}'
-              : property['city'] ?? property['state'] ?? 'Unknown location',
-          'type': property['property_type'] ?? 'House',
-          'bedrooms': property['bedrooms'] ?? 0,
-          'bathrooms': property['bathrooms'] ?? 0,
-          'image': property['image_url'] ?? 'assets/image1.jpg',
-          'isFavorite': true,
+        // Get the first photo URL if available
+        String imageUrl = 'assets/image1.jpg'; // Default image
+        if (property['property_photos'] != null && 
+            property['property_photos'].isNotEmpty) {
+          imageUrl = property['property_photos'][0]['photo_url'] ?? 'assets/image1.jpg';
+        }
+
+          // Format the property data for display
+          formattedProperties.add({
+            'id': property['id'],
+            'name': property['title'] ?? 'Property',
+            'price': property['price'] ?? 0,
+            'location': property['city'] != null && property['state'] != null
+                ? '${property['city']}, ${property['state']}'
+                : property['city'] ?? property['state'] ?? 'Unknown location',
+            'type': property['property_type'] ?? 'House',
+            'bedrooms': property['bedrooms'] ?? 0,
+            'bathrooms': property['bathrooms'] ?? 0,
+          'image': imageUrl,
+            'isFavorite': true,
           'created_at': property['created_at'],
-        });
+          'property_photos': property['property_photos'] ?? [],
+          });
       }
 
       setState(() {
@@ -270,16 +278,19 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
   Widget _buildPropertyCard(Map<String, dynamic> property, int index) {
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
+      onTap: () async {
+        // Navigate to property details and wait for result
+        final result = await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => PropertyDetailsPage(property: property),
           ),
-        ).then((_) {
-          // Refresh favorites list when returning from details page
+        );
+
+        // If property was edited (result is true), refresh the favorites list
+        if (result == true) {
           _loadFavorites();
-        });
+        }
       },
       child: Card(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -293,8 +304,8 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                 ClipRRect(
                   borderRadius:
                       const BorderRadius.vertical(top: Radius.circular(12)),
-                  child: Image.asset(
-                    'assets/image1.jpg',
+                  child: Image.network(
+                    property['image'],
                     height: 120,
                     width: double.infinity,
                     fit: BoxFit.cover,
